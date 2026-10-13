@@ -7,6 +7,7 @@ import { ProviderInstanceIcon } from "./ProviderInstanceIcon";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { cn } from "~/lib/utils";
 import type { MessageResolver } from "../../i18n/messages";
+import { remainingPercent } from "@t3tools/shared/usageLimits";
 import {
   isProviderInstancePickerReady,
   shouldShowInstanceBadge,
@@ -42,6 +43,19 @@ function describeUnavailableInstance(
         ? msg("{label}: Limited.", { label })
         : msg("{label}: Not ready.", { label }),
   );
+}
+
+/**
+ * Name plus the quota left on the account's session and weekly windows, so
+ * choosing between accounts of one provider shows which has room.
+ */
+function describeReadyInstance(entry: ProviderInstanceEntry): string {
+  const windows = entry.snapshot.usageLimits?.windows ?? [];
+  const shown = (["session", "weekly"] as const).flatMap((kind) => {
+    const window = windows.find((candidate) => candidate.kind === kind);
+    return window ? [`${window.label} ${remainingPercent(window)}% left`] : [];
+  });
+  return shown.length === 0 ? entry.displayName : `${entry.displayName} (${shown.join(", ")})`;
 }
 
 const PICKER_TOOLTIP_SIDE = "left" as const;
@@ -157,7 +171,7 @@ export const ModelPickerSidebar = memo(function ModelPickerSidebar(props: {
               ? describeUnavailableInstance(entry, m)
               : isContextDisabled
                 ? (props.getDisabledInstanceTooltip?.(entry) ?? entry.displayName)
-                : entry.displayName;
+                : describeReadyInstance(entry);
 
             const button = (
               <Toolbar.Button

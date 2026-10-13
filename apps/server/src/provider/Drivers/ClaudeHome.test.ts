@@ -1,3 +1,5 @@
+// @effect-diagnostics-next-line nodeBuiltinImport:off
+import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -13,6 +15,10 @@ import {
   mergeClaudeProcessEnvironment,
   resolveClaudeHomePath,
 } from "./ClaudeHome.ts";
+
+// Junctions need no Windows privileges (cswap links profiles this way there); POSIX ignores the type.
+const linkDirectory = (target: string, link: string) =>
+  Effect.sync(() => NodeFS.symlinkSync(target, link, "junction"));
 
 it.layer(NodeServices.layer)("ClaudeHome", (it) => {
   describe("Claude home resolution", () => {
@@ -47,6 +53,36 @@ it.layer(NodeServices.layer)("ClaudeHome", (it) => {
           explicit,
         );
       }),
+    );
+
+    it.effect("groups a config directory with the one its transcripts link into", () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "claude-home-" });
+        const shared = path.join(root, "shared");
+        const linked = path.join(root, "linked");
+        const separate = path.join(root, "separate");
+        yield* fileSystem.makeDirectory(path.join(shared, "projects"), { recursive: true });
+        yield* fileSystem.makeDirectory(linked, { recursive: true });
+        yield* linkDirectory(path.join(shared, "projects"), path.join(linked, "projects"));
+        yield* fileSystem.makeDirectory(path.join(separate, "projects"), { recursive: true });
+        // A second hop still lands on the folder that holds the transcripts.
+        const twice = path.join(root, "twice");
+        yield* fileSystem.makeDirectory(twice, { recursive: true });
+        yield* linkDirectory(path.join(linked, "projects"), path.join(twice, "projects"));
+        const realShared = yield* fileSystem.realPath(shared);
+
+        expect(yield* makeClaudeContinuationGroupKey({ homePath: linked })).toBe(
+          `claude:home:${realShared}`,
+        );
+        expect(yield* makeClaudeContinuationGroupKey({ homePath: twice })).toBe(
+          `claude:home:${realShared}`,
+        );
+        expect(yield* makeClaudeContinuationGroupKey({ homePath: separate })).toBe(
+          `claude:home:${separate}`,
+        );
+      }).pipe(Effect.scoped),
     );
 
     it.effect("separates capability probes by cwd", () =>

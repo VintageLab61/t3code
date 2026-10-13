@@ -482,6 +482,23 @@ describe("resolveProjectProviderInstanceEnabled", () => {
   const projectId = "project-a" as ProjectId;
   const instanceId = ProviderInstanceId.make("codex_work");
 
+  it("keeps discovered cswap accounts on until settings configure them", () => {
+    const cswapId = ProviderInstanceId.make("claude_cswap_3");
+    expect(resolveProjectProviderInstanceEnabled(DEFAULT_SERVER_SETTINGS, null, cswapId)).toBe(
+      true,
+    );
+    expect(resolveProjectProviderInstanceEnabled(DEFAULT_SERVER_SETTINGS, null, instanceId)).toBe(
+      false,
+    );
+    const disabled: ServerSettings = {
+      ...DEFAULT_SERVER_SETTINGS,
+      providerInstances: {
+        [cswapId]: { driver: ProviderDriverKind.make("claudeAgent"), enabled: false },
+      },
+    };
+    expect(resolveProjectProviderInstanceEnabled(disabled, null, cswapId)).toBe(false);
+  });
+
   it("lets a project disable an instance the machine enabled", () => {
     const settings: ServerSettings = {
       ...DEFAULT_SERVER_SETTINGS,

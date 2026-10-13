@@ -38,6 +38,7 @@ import {
   ClaudeSettings,
   CodexSettings,
   ProviderInstanceId,
+  type ProviderInstanceConfig,
 } from "@t3tools/contracts";
 import { makeKeyedCoalescingWorker } from "@t3tools/shared/KeyedCoalescingWorker";
 import * as KeyedLock from "@t3tools/shared/KeyedLock";
@@ -72,6 +73,7 @@ import { mergeProviderInstanceEnvironment } from "@t3tools/provider-core/server/
 import { resolveCodexHomeLayout } from "../provider/Drivers/CodexHomeLayout.ts";
 import { makeClaudeEnvironment } from "../provider/Drivers/ClaudeHome.ts";
 import type { deriveProviderInstanceConfigMap } from "../provider/ProviderInstanceRegistryHydration.ts";
+import * as CswapDiscovery from "../provider/CswapDiscovery.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import { increment, terminalSessionsTotal } from "../observability/Metrics.ts";
 import { expandHomeVariable } from "@t3tools/provider-core/server/pathExpansion";
@@ -1706,12 +1708,16 @@ export const resolveProviderInstanceTerminalEnvironment = Effect.fn(
   readonly path: Path.Path;
   readonly rawProviderInstanceId: string;
   readonly env: Record<string, string> | undefined;
+  /** Claude instances discovered from cswap, which settings do not list. */
+  readonly discoveredInstances?: Readonly<Record<string, ProviderInstanceConfig>>;
 }) {
   const providerInstanceId = ProviderInstanceId.make(input.rawProviderInstanceId);
   const settings = yield* input.serverSettings.getSettings.pipe(
     Effect.mapError((cause) => new TerminalProviderEnvironmentError({ providerInstanceId, cause })),
   );
-  const instance = input.deriveProviderInstanceConfigMap(settings)[providerInstanceId];
+  const instance = input.deriveProviderInstanceConfigMap(settings, input.discoveredInstances)[
+    providerInstanceId
+  ];
   if (instance === undefined) {
     return yield* new TerminalProviderInstanceNotFoundError({ providerInstanceId });
   }
@@ -1750,17 +1756,22 @@ export const make = Effect.fn("TerminalManager.make")(function* (
   const nativeTelemetry = yield* NativeTelemetryClient.NativeTelemetryClient;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const path = yield* Path.Path;
+  const cswapDiscovery = yield* Effect.serviceOption(CswapDiscovery.CswapDiscovery);
   const resolveProviderInstanceEnvironment = Effect.fn(
     "terminal.resolveProviderInstanceEnvironment",
-  )((rawProviderInstanceId: string, env: Record<string, string> | undefined) =>
-    resolveProviderInstanceTerminalEnvironment({
+  )(function* (rawProviderInstanceId: string, env: Record<string, string> | undefined) {
+    const discoveredInstances = Option.isSome(cswapDiscovery)
+      ? yield* cswapDiscovery.value.instances
+      : {};
+    return yield* resolveProviderInstanceTerminalEnvironment({
       deriveProviderInstanceConfigMap: deriveConfigMap,
       serverSettings,
       path,
       rawProviderInstanceId,
       env,
-    }),
-  );
+      discoveredInstances,
+    });
+  });
   return yield* makeWithOptions({
     logsDir: terminalLogsDir,
     ptyAdapter,

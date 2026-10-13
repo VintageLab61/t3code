@@ -16,6 +16,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import type * as SqlClient from "effect/sql/SqlClient";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Stream from "effect/Stream";
 
@@ -23,6 +24,7 @@ import * as ManagedProviders from "../policy/managedProviders.ts";
 import * as Settings from "../serverSettings.ts";
 import * as SecretResolver from "../secrets/SecretResolver.ts";
 import { BUILT_IN_DRIVERS, type BuiltInDriversEnv } from "./builtInDrivers.ts";
+import * as CswapDiscovery from "./CswapDiscovery.ts";
 import * as ProviderInstanceRegistry from "./ProviderInstanceRegistry.ts";
 import * as ProviderInstanceRegistryMutator from "./ProviderInstanceRegistryMutator.ts";
 import * as ProviderOrchestrationAdapterInfrastructure from "./ProviderOrchestrationAdapterInfrastructure.ts";
@@ -52,10 +54,19 @@ type ProviderInstanceRegistryHydrationEnv =
   // Adapter ids read which subagent threads predate short ids.
   | SqlClient.SqlClient;
 
+/**
+ * Explicit `providerInstances` entries plus an implicit default instance for
+ * each built-in driver whose default slot is empty, plus discovered cswap
+ * account instances. Pure so the hydration rule can be tested without layers.
+ */
 export const deriveProviderInstanceConfigMap = (
   settings: ServerSettings,
+  discoveredInstances: Readonly<Record<string, ProviderInstanceConfig>> = {},
 ): ProviderInstanceConfigMap => {
-  const merged: Record<string, ProviderInstanceConfig> = { ...settings.providerInstances };
+  const merged: Record<string, ProviderInstanceConfig> = {
+    ...discoveredInstances,
+    ...settings.providerInstances,
+  };
 
   for (const driver of BUILT_IN_DRIVERS) {
     if (driver.metadata.hasDefaultInstance === false) continue;
@@ -143,6 +154,11 @@ export const layerSettingsWatcher = (
     Effect.gen(function* () {
       const mutator = yield* ProviderInstanceRegistryMutator.ProviderInstanceRegistryMutator;
       const serverSettings = yield* Settings.ServerSettingsService;
+      // cswap accounts join the map; absent (as in focused tests) means none.
+      const discovery = yield* Effect.serviceOption(CswapDiscovery.CswapDiscovery);
+      const discoveredInstances = Option.isSome(discovery)
+        ? discovery.value.instances
+        : Effect.succeed({} as Readonly<Record<string, ProviderInstanceConfig>>);
       let secretProviders = initialSettings && vaultConfigs(initialSettings);
       yield* settingsChanges.pipe(
         Stream.runForEach(() =>
@@ -151,7 +167,9 @@ export const layerSettingsWatcher = (
           serverSettings.getSettings.pipe(
             Effect.flatMap((current) =>
               Effect.gen(function* () {
-                yield* mutator.reconcile(deriveProviderInstanceConfigMap(current));
+                yield* mutator.reconcile(
+                  deriveProviderInstanceConfigMap(current, yield* discoveredInstances),
+                );
                 // Reconcile leaves instances parked on an unreadable secret alone,
                 // and a corrected secret provider is what can make them readable.
                 const next = vaultConfigs(current);
@@ -168,12 +186,28 @@ export const layerSettingsWatcher = (
         ),
         Effect.forkScoped,
       );
+      if (Option.isSome(discovery)) {
+        yield* discovery.value.instanceChanges.pipe(
+          Stream.runForEach((discovered) =>
+            serverSettings.getSettings.pipe(
+              Effect.flatMap((current) =>
+                mutator.reconcile(deriveProviderInstanceConfigMap(current, discovered)),
+              ),
+              Effect.catchCause((cause) =>
+                Effect.logError("ProviderInstanceRegistry reconcile failed", cause),
+              ),
+            ),
+          ),
+          Effect.forkScoped,
+        );
+      }
     }),
   );
 
 export const layer: Layer.Layer<
   | ProviderInstanceRegistry.ProviderInstanceRegistry
-  | ProviderInstanceRegistryMutator.ProviderInstanceRegistryMutator,
+  | ProviderInstanceRegistryMutator.ProviderInstanceRegistryMutator
+  | CswapDiscovery.CswapDiscovery,
   never,
   ProviderInstanceRegistryHydrationEnv
 > = Layer.unwrap(
@@ -184,13 +218,15 @@ export const layer: Layer.Layer<
     );
     // Subscribe before the seed read so saves during registry construction are queued.
     const settingsChanges = yield* serverSettings.subscribeChanges;
+    const discovery = yield* CswapDiscovery.CswapDiscovery;
     const initialSettings: ServerSettings | undefined = yield* serverSettings.getSettings.pipe(
       Effect.orElseSucceed(() => undefined),
     );
+    // Cached cswap accounts route their threads before the first refresh finishes.
     const initialConfigMap =
       initialSettings === undefined
         ? ({} as ProviderInstanceConfigMap)
-        : deriveProviderInstanceConfigMap(initialSettings);
+        : deriveProviderInstanceConfigMap(initialSettings, yield* discovery.instances);
 
     // Drivers launch from the host environment, minus launch overrides a policy ignores.
     const hostEnvironment = ManagedProviders.providerHostEnvironment(
@@ -216,9 +252,10 @@ export const layer: Layer.Layer<
       Layer.provideMerge(layerMutable),
     );
   }),
-) as Layer.Layer<
+).pipe(Layer.provideMerge(CswapDiscovery.layer)) as Layer.Layer<
   | ProviderInstanceRegistry.ProviderInstanceRegistry
-  | ProviderInstanceRegistryMutator.ProviderInstanceRegistryMutator,
+  | ProviderInstanceRegistryMutator.ProviderInstanceRegistryMutator
+  | CswapDiscovery.CswapDiscovery,
   never,
   ProviderInstanceRegistryHydrationEnv
 >;

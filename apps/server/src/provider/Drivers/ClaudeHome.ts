@@ -143,13 +143,30 @@ export const claudeLocalSettingsDirectory = Effect.fn("claudeLocalSettingsDirect
   }
 });
 
+/**
+ * Profiles whose `projects` folder links into another config dir (as cswap profiles link into
+ * `~/.claude`) share that dir's continuation group, so they can resume its transcripts natively.
+ */
 export const makeClaudeContinuationGroupKey = Effect.fn("makeClaudeContinuationGroupKey")(
   function* (
     config: Pick<ClaudeSettings, "homePath">,
     environment?: NodeJS.ProcessEnv,
-  ): Effect.fn.Return<string, never, Path.Path> {
+  ): Effect.fn.Return<string, never, Path.Path | FileSystem.FileSystem> {
+    const path = yield* Path.Path;
+    const fileSystem = yield* FileSystem.FileSystem;
     const resolvedHomePath = yield* resolveClaudeHomePath(config, environment);
-    return `claude:home:${resolvedHomePath}`;
+    const projectsPath = path.join(resolvedHomePath, "projects");
+    // Only a linked `projects` folder changes the key, so every existing
+    // instance keeps the key it already had. Links are followed to the end.
+    const linkedProjects = yield* fileSystem.readLink(projectsPath).pipe(
+      Effect.andThen(fileSystem.realPath(projectsPath)),
+      Effect.orElseSucceed(() => undefined),
+    );
+    const transcriptHome =
+      linkedProjects !== undefined && path.basename(linkedProjects) === "projects"
+        ? path.dirname(linkedProjects)
+        : resolvedHomePath;
+    return `claude:home:${transcriptHome}`;
   },
 );
 

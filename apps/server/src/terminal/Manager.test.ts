@@ -2775,6 +2775,28 @@ it.layer(
     ),
   );
 
+  it.effect("resolves a cswap account the server discovered", () =>
+    Effect.gen(function* () {
+      const path = yield* Path.Path;
+      const serverSettings = yield* ServerSettings.ServerSettingsService;
+      const environment = yield* TerminalManager.resolveProviderInstanceTerminalEnvironment({
+        deriveProviderInstanceConfigMap,
+        serverSettings,
+        path,
+        rawProviderInstanceId: "claude_cswap_3",
+        env: undefined,
+        discoveredInstances: {
+          claude_cswap_3: {
+            driver: ProviderDriverKind.make("claudeAgent"),
+            config: { homePath: "/profiles/3" },
+          },
+        },
+      });
+
+      expect(environment.CLAUDE_CONFIG_DIR).toBe(path.resolve("/profiles/3"));
+    }).pipe(Effect.provide(ServerSettings.layerTest({}))),
+  );
+
   it.effect("restarts a running terminal when the resolved provider environment changes", () =>
     Effect.gen(function* () {
       const providerInstanceId = ProviderInstanceId.make("codex_work");

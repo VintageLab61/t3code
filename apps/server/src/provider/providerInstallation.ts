@@ -19,6 +19,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
 import * as CodexInstallation from "./CodexInstallation.ts";
+import * as CswapDiscovery from "./CswapDiscovery.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as AntigravityInstallation from "./AntigravityInstallation.ts";
 import { deriveProviderInstanceConfigMap } from "./ProviderInstanceRegistryHydration.ts";
@@ -60,6 +61,7 @@ const make = Effect.fn("makeProviderInstallation")(function* () {
   const scope = yield* Effect.scope;
   // A start during a running install joins it, so one operation is checked once whichever instance asked.
   let accountCheckOperation: string | undefined;
+  const cswapDiscovery = yield* Effect.serviceOption(CswapDiscovery.CswapDiscovery);
 
   const readEntries = Effect.fn("ProviderInstallation.readEntries")(function* (
     instanceId: ProviderInstanceId,
@@ -75,7 +77,8 @@ const make = Effect.fn("makeProviderInstallation")(function* () {
           }),
       ),
     );
-    return deriveProviderInstanceConfigMap(current);
+    const discovered = Option.isSome(cswapDiscovery) ? yield* cswapDiscovery.value.instances : {};
+    return deriveProviderInstanceConfigMap(current, discovered);
   });
 
   const requireInstance = Effect.fn("ProviderInstallation.requireInstance")(function* (

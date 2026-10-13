@@ -1629,8 +1629,19 @@ const DEFAULT_ENABLED_DEFAULT_INSTANCES: ReadonlySet<ProviderInstanceId> = new S
   ["codex", "claudeAgent"].map((instanceId) => ProviderInstanceId.make(instanceId)),
 );
 
+/**
+ * Claude instances the server derives from the `cswap` account switcher, one
+ * per account (`claude_cswap_<n>`). They run without a settings entry.
+ */
+export const CSWAP_PROVIDER_INSTANCE_PREFIX = "claude_cswap_";
+
+/**
+ * Enabled state for an id with no `providerInstances` entry: the Codex and Claude defaults and
+ * cswap accounts start on. Work aimed at an undiscovered cswap account goes to default Claude.
+ */
 export const isUnconfiguredDefaultInstanceEnabled = (instanceId: ProviderInstanceId): boolean =>
-  DEFAULT_ENABLED_DEFAULT_INSTANCES.has(instanceId);
+  DEFAULT_ENABLED_DEFAULT_INSTANCES.has(instanceId) ||
+  instanceId.startsWith(CSWAP_PROVIDER_INSTANCE_PREFIX);
 
 const defaultEnabledForDriver = (driver: ProviderDriverKind): boolean =>
   !DEFAULT_DISABLED_PROVIDER_DRIVERS.has(driver);
